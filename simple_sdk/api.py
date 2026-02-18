@@ -16,9 +16,16 @@ if TYPE_CHECKING:
 
 
     class RetryOptions(_RequestOptions):
+        """Options for retrying HTTP requests."""
+
         retry_status: int | Sequence[int]
+        """HTTP status codes that should trigger a retry (default: 500)."""
+
         max_retries: int
+        """The maximum number of retries before giving up (default: 3)."""
+
         retry_delay: float
+        """The delay in seconds between retries (default: 2)."""
 
 _BAD_REQUEST_STATUS = range(400, 500)  # HTTP status codes for client errors (4xx)
 

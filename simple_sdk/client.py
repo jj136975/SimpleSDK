@@ -16,13 +16,16 @@ class ApiClient[TConfig: BaseConfiguration, TAuth = str]:
 
     @property
     def config(self) -> TConfig:
+        """Access the client's configuration."""
         return self._config
 
     @property
     def auth(self) -> CredentialLoader[TConfig, TAuth]:
+        """Access the client's authentication loader."""
         return self._auth
 
     def _create_headers(self, api_key: TAuth, ) -> dict[str, str]:
+        """Create headers for the API session, including authentication and user agent."""
         headers = self._config.headers.copy()
 
         if auth_prefix := self._auth.get_auth_header_prefix():
@@ -36,6 +39,7 @@ class ApiClient[TConfig: BaseConfiguration, TAuth = str]:
         return headers
 
     async def _create_session(self) -> ClientSession:
+        """Create an aiohttp ClientSession with the appropriate headers for authentication."""
         api_key = await self._auth.authenticate(self._config)
         headers = self._create_headers(api_key)
 
@@ -58,12 +62,14 @@ class JsonApiClient[TConfig: BaseConfiguration, TAuth = str](ApiClient[TConfig, 
     """API client that automatically sets Content-Type to application/json and uses serde for JSON serialization."""
     @override
     def _create_headers(self, api_key: TAuth) -> dict[str, str]:
+        """Extend the base headers to include Content-Type for JSON requests."""
         headers = super()._create_headers(api_key)
         headers['Content-Type'] = 'application/json'
         return headers
 
     @override
     async def _create_session(self) -> ClientSession | None:
+        """Create an aiohttp ClientSession with JSON serialization using serde."""
         api_key = await self._auth.authenticate(self._config)
         headers = self._create_headers(api_key)
 

@@ -1,4 +1,5 @@
 from abc import ABC, abstractmethod
+from typing import override
 
 
 class AuthenticationError(Exception):
@@ -13,6 +14,7 @@ class CredentialLoader[TConfig = None, TAuth = str](ABC):
         pass
 
     def get_auth_header_prefix(self) -> str | None:
+        """Return the prefix to use in the Authorization header, or None for no prefix."""
         return "Bearer"
 
 
@@ -20,5 +22,6 @@ class StaticCredentialLoader(CredentialLoader):
     def __init__(self, token: str):
         self.token = token
 
+    @override
     async def authenticate(self, _) -> str:
         return self.token
