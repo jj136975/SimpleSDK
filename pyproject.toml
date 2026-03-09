@@ -1,0 +1,17 @@
+[build-system]
+requires = ["setuptools>=68.0"]
+build-backend = "setuptools.backends._legacy:_Backend"
+
+[project]
+name = "simple_sdk"
+version = "0.1.0"
+requires-python = ">=3.12"
+dependencies = [
+    "aiohttp>=3.9",
+    "pyserde>=0.22",
+    "orjson",
+]
+
+[tool.setuptools.packages.find]
+include = ["simple_sdk*"]
+exclude = ["examples*", "tests*"]
