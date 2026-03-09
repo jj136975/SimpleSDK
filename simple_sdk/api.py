@@ -1,9 +1,10 @@
 import asyncio
 import random
+from dataclasses import dataclass
 from typing import Any, TypeVar, Sequence, TYPE_CHECKING, Coroutine
 
 import serde
-from aiohttp import ClientSession, hdrs, payload
+from aiohttp import ClientSession, ClientResponse, hdrs, payload
 from aiohttp.typedefs import StrOrURL, Query
 from serde import SerdeError, from_dict
 
@@ -30,19 +31,51 @@ if TYPE_CHECKING:
 _BAD_REQUEST_STATUS = range(400, 500)  # HTTP status codes for client errors (4xx)
 
 
+@dataclass
+class Retry:
+    """Return from on_status to retry the request without counting against max_retries."""
+    delay: float | None = None
+    """Override the retry delay in seconds. If None, uses the request's retry_delay."""
+
+
+@dataclass
+class Raise:
+    """Return from on_status to immediately raise an error."""
+    error: Exception
+
+
 class BaseApi:
     """
     Base class for API clients.
     """
 
+    _SUCCESS_STATUS: frozenset[int] = frozenset({200, 201})
+    """HTTP status codes treated as success. Override in subclasses to add e.g. 204."""
+
     def __init__(self, session: ClientSession, default_error_model: type[Any] = dict):
         """
-        Initialize the API client with an API key.
+        Initialize the API client.
 
         :param session: The aiohttp ClientSession to use for making requests.
+        :param default_error_model: The type to deserialize error responses into.
         """
         self._session = session
         self._default_error_model = default_error_model
+
+    async def on_status(self, status: int, response: ClientResponse) -> Retry | Raise | None:
+        """
+        Hook for subclasses to handle specific HTTP status codes.
+
+        Called for every response whose status is not in _SUCCESS_STATUS, before the
+        default retry/error logic runs. Override in subclasses to customize behavior
+        for specific status codes (e.g. 202 Request Not Ready, 429 Rate Limit).
+
+        :param status: The HTTP status code.
+        :param response: The aiohttp response object (body can be read).
+        :return: Retry to retry without counting against max_retries,
+                 Raise to immediately raise an error, or None for default handling.
+        """
+        return None
 
     if TYPE_CHECKING:
         from typing import Unpack
@@ -157,32 +190,42 @@ class BaseApi:
                     raise EncodeError(f"Failed to encode JSON payload: {e}", type(json)) from e
 
             error: Exception | None = None
-            for attempt in range(max_retries + 1):
+            attempt = 0
+            while True:
                 try:
                     async with self._session.request(method, url, data=data, **kwargs) as response:
                         status = response.status
 
-                        if status == 200 or status == 201:
+                        if status in self._SUCCESS_STATUS:
                             try:
                                 return await response.json(loads=lambda obj: serde.json.from_json(model, obj))
                             except SerdeError as e:
                                 raise DecodeError(f"Failed to decode JSON response: {e}", await response.text(),
                                                   model) from e
-                        elif (isinstance(retry_status, Sequence) and status in retry_status) or status == retry_status:
-                            if attempt < max_retries:
-                                await asyncio.sleep(retry_delay * (2 ** attempt) + random.uniform(0, 1))
-                                continue
-                            if status in _BAD_REQUEST_STATUS:
-                                error_data = await response.json()
-                                try:
-                                    api_error = from_dict(self._default_error_model, error_data)
-                                    error = ApiError(api_error, status)
-                                except SerdeError:
-                                    error = DecodeError(f"Failed to decode error response: {error_data}",
-                                                        error_data, self._default_error_model)
-                            else:
-                                error = InvalidStatus(await response.text(), status)
+
+                        directive = await self.on_status(status, response)
+                        if isinstance(directive, Retry):
+                            await asyncio.sleep(directive.delay if directive.delay is not None else retry_delay)
+                            continue
+                        elif isinstance(directive, Raise):
+                            error = directive.error
                             break
+
+                        if (isinstance(retry_status, Sequence) and status in retry_status) or status == retry_status:
+                            if attempt >= max_retries:
+                                if status in _BAD_REQUEST_STATUS:
+                                    error_data = await response.json()
+                                    try:
+                                        api_error = from_dict(self._default_error_model, error_data)
+                                        error = ApiError(api_error, status)
+                                    except SerdeError:
+                                        error = DecodeError(f"Failed to decode error response: {error_data}",
+                                                            error_data, self._default_error_model)
+                                else:
+                                    error = InvalidStatus(await response.text(), status)
+                                break
+                            attempt += 1
+                            await asyncio.sleep(retry_delay * (2 ** (attempt - 1)) + random.uniform(0, 1))
                         elif status in _BAD_REQUEST_STATUS:
                             error_data = await response.json()
                             try:
@@ -197,10 +240,10 @@ class BaseApi:
                             break
                 except asyncio.TimeoutError as e:
                     error = Timeout(f"Request to {url} timed out: {e}")
-                    if attempt < max_retries:
-                        await asyncio.sleep(retry_delay * (2 ** attempt) + random.uniform(0, 1))
-                        continue
-                    break
+                    if attempt >= max_retries:
+                        break
+                    attempt += 1
+                    await asyncio.sleep(retry_delay * (2 ** (attempt - 1)) + random.uniform(0, 1))
             if error is None:
                 raise RuntimeError("Request loop completed without producing a result or error")
             raise error
