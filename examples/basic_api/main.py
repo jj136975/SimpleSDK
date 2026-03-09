@@ -1,5 +1,4 @@
-from basic_sdk.client import MyConfig
-from examples.basic_api.basic_sdk.client import MyClient, MyAuthenticator
+from basic_sdk.client import MyConfig, MyClient, MyAuthenticator
 
 
 async def main() -> None:
@@ -8,13 +7,15 @@ async def main() -> None:
         agent="My Python SDK",
     )
 
-    MyAuthenticator(
+    auth = MyAuthenticator(
         auth_url="http://localhost:8080/auth",
         username="MyUser",
         password="MySecurePassword123!",
     )
 
-    async with MyClient(config) as client:
+    async with MyClient(config, auth) as client:
+        profile = await client.my_api.get_my_profile()
+        print(profile)
 
 
 if __name__ == "__main__":

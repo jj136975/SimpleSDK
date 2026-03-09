@@ -1,10 +1,10 @@
 import asyncio
+import random
 from typing import Any, TypeVar, Sequence, TYPE_CHECKING, Coroutine
 
 import serde
 from aiohttp import ClientSession, hdrs, payload
 from aiohttp.typedefs import StrOrURL, Query
-from aiohttp.web_exceptions import HTTPRequestTimeout, HTTPGatewayTimeout
 from serde import SerdeError, from_dict
 
 from .errors import InvalidStatus, Timeout, EncodeError, DecodeError, ApiError
@@ -19,13 +19,13 @@ if TYPE_CHECKING:
         """Options for retrying HTTP requests."""
 
         retry_status: int | Sequence[int]
-        """HTTP status codes that should trigger a retry (default: 500)."""
+        """HTTP status codes that should trigger a retry (default: (500, 502, 503, 504))."""
 
         max_retries: int
         """The maximum number of retries before giving up (default: 3)."""
 
         retry_delay: float
-        """The delay in seconds between retries (default: 2)."""
+        """The base delay in seconds between retries, with exponential backoff (default: 2)."""
 
 _BAD_REQUEST_STATUS = range(400, 500)  # HTTP status codes for client errors (4xx)
 
@@ -55,9 +55,9 @@ class BaseApi:
             :param url: The URL to send the request to.
             :param model: The type to deserialize the response into.
             :param kwargs: Additional keyword arguments for retry options:
-                - retry_status: An int or a sequence of ints representing HTTP status codes that should trigger a retry (default: 500).
+                - retry_status: An int or a sequence of ints representing HTTP status codes that should trigger a retry (default: (500, 502, 503, 504)).
                 - max_retries: The maximum number of retries before giving up (default: 3).
-                - retry_delay: The delay in seconds between retries (default: 2).
+                - retry_delay: The base delay in seconds between retries, with exponential backoff (default: 2).
             :return: An instance of type T deserialized from the JSON response.
             """
             ...
@@ -70,9 +70,9 @@ class BaseApi:
             :param params: Optional query parameters to include in the request.
             :param model: The type to deserialize the response into.
             :param kwargs: Additional keyword arguments for retry options:
-                - retry_status: An int or a sequence of ints representing HTTP status codes that should trigger a retry (default: 500).
+                - retry_status: An int or a sequence of ints representing HTTP status codes that should trigger a retry (default: (500, 502, 503, 504)).
                 - max_retries: The maximum number of retries before giving up (default: 3).
-                - retry_delay: The delay in seconds between retries (default: 2).
+                - retry_delay: The base delay in seconds between retries, with exponential backoff (default: 2).
             :return: An instance of type T deserialized from the JSON response.
             """
             ...
@@ -85,9 +85,9 @@ class BaseApi:
             :param json: The JSON payload to include in the POST request.
             :param model: The type to deserialize the response into.
             :param kwargs: Additional keyword arguments for retry options:
-                - retry_status: An int or a sequence of ints representing HTTP status codes that should trigger a retry (default: 500).
+                - retry_status: An int or a sequence of ints representing HTTP status codes that should trigger a retry (default: (500, 502, 503, 504)).
                 - max_retries: The maximum number of retries before giving up (default: 3).
-                - retry_delay: The delay in seconds between retries (default: 2).
+                - retry_delay: The base delay in seconds between retries, with exponential backoff (default: 2).
             :return: An instance of type T deserialized from the JSON response.
             """
             ...
@@ -100,9 +100,39 @@ class BaseApi:
             :param json: The JSON payload to include in the PUT request.
             :param model: The type to deserialize the response into.
             :param kwargs: Additional keyword arguments for retry options:
-                - retry_status: An int or a sequence of ints representing HTTP status codes that should trigger a retry (default: 500).
+                - retry_status: An int or a sequence of ints representing HTTP status codes that should trigger a retry (default: (500, 502, 503, 504)).
                 - max_retries: The maximum number of retries before giving up (default: 3).
-                - retry_delay: The delay in seconds between retries (default: 2).
+                - retry_delay: The base delay in seconds between retries, with exponential backoff (default: 2).
+            :return: An instance of type T deserialized from the JSON response.
+            """
+            ...
+
+        def delete(self, endpoint: str, params: Query | None = None, model: type[T] = dict,
+                   **kwargs: Unpack[RetryOptions]) -> Coroutine[Any, Any, T]:
+            """
+                Make a DELETE request to the specified endpoint with automatic retries and error handling.
+            :param endpoint: The API endpoint to send the DELETE request to.
+            :param params: Optional query parameters to include in the request.
+            :param model: The type to deserialize the response into.
+            :param kwargs: Additional keyword arguments for retry options:
+                - retry_status: An int or a sequence of ints representing HTTP status codes that should trigger a retry (default: (500, 502, 503, 504)).
+                - max_retries: The maximum number of retries before giving up (default: 3).
+                - retry_delay: The base delay in seconds between retries, with exponential backoff (default: 2).
+            :return: An instance of type T deserialized from the JSON response.
+            """
+            ...
+
+        def patch(self, endpoint: str, json: Any, model: type[T] = dict, **kwargs: Unpack[RetryOptions]) -> Coroutine[
+            Any, Any, T]:
+            """
+                Make a PATCH request to the specified endpoint with automatic retries and error handling.
+            :param endpoint: The API endpoint to send the PATCH request to.
+            :param json: The JSON payload to include in the PATCH request.
+            :param model: The type to deserialize the response into.
+            :param kwargs: Additional keyword arguments for retry options:
+                - retry_status: An int or a sequence of ints representing HTTP status codes that should trigger a retry (default: (500, 502, 503, 504)).
+                - max_retries: The maximum number of retries before giving up (default: 3).
+                - retry_delay: The base delay in seconds between retries, with exponential backoff (default: 2).
             :return: An instance of type T deserialized from the JSON response.
             """
             ...
@@ -115,7 +145,7 @@ class BaseApi:
                 *,
                 json: Any = None,
                 data: Any = None,
-                retry_status: int | Sequence[int] = 500,
+                retry_status: int | Sequence[int] = (500, 502, 503, 504),
                 max_retries: int = 3,
                 retry_delay: float = 2,
                 **kwargs: Any
@@ -127,7 +157,7 @@ class BaseApi:
                     raise EncodeError(f"Failed to encode JSON payload: {e}", type(json)) from e
 
             error: Exception | None = None
-            while True:
+            for attempt in range(max_retries + 1):
                 try:
                     async with self._session.request(method, url, data=data, **kwargs) as response:
                         status = response.status
@@ -139,20 +169,20 @@ class BaseApi:
                                 raise DecodeError(f"Failed to decode JSON response: {e}", await response.text(),
                                                   model) from e
                         elif (isinstance(retry_status, Sequence) and status in retry_status) or status == retry_status:
-                            if max_retries <= 0:
-                                if status in _BAD_REQUEST_STATUS:
-                                    error_data = await response.json()
-                                    try:
-                                        api_error = from_dict(self._default_error_model, error_data)
-                                        error = ApiError(api_error, status)
-                                    except SerdeError:
-                                        error = DecodeError(f"Failed to decode error response: {error_data}",
-                                                            error_data, self._default_error_model)
-                                else:
-                                    error = InvalidStatus(await response.text(), status)
-                                break
-                            max_retries -= 1
-                            await asyncio.sleep(retry_delay)
+                            if attempt < max_retries:
+                                await asyncio.sleep(retry_delay * (2 ** attempt) + random.uniform(0, 1))
+                                continue
+                            if status in _BAD_REQUEST_STATUS:
+                                error_data = await response.json()
+                                try:
+                                    api_error = from_dict(self._default_error_model, error_data)
+                                    error = ApiError(api_error, status)
+                                except SerdeError:
+                                    error = DecodeError(f"Failed to decode error response: {error_data}",
+                                                        error_data, self._default_error_model)
+                            else:
+                                error = InvalidStatus(await response.text(), status)
+                            break
                         elif status in _BAD_REQUEST_STATUS:
                             error_data = await response.json()
                             try:
@@ -165,13 +195,14 @@ class BaseApi:
                         else:
                             error = InvalidStatus(await response.text(), status)
                             break
-                except HTTPRequestTimeout or HTTPGatewayTimeout as e:
+                except asyncio.TimeoutError as e:
                     error = Timeout(f"Request to {url} timed out: {e}")
-                    if max_retries <= 0:
-                        break
-                    max_retries -= 1
-                    await asyncio.sleep(retry_delay)
-            assert error is not None
+                    if attempt < max_retries:
+                        await asyncio.sleep(retry_delay * (2 ** attempt) + random.uniform(0, 1))
+                        continue
+                    break
+            if error is None:
+                raise RuntimeError("Request loop completed without producing a result or error")
             raise error
 
         def get(self, endpoint: str, params: Query | None = None, model: type[T] = dict, **kwargs: Any) -> Coroutine[
@@ -183,3 +214,10 @@ class BaseApi:
 
         def put(self, endpoint: str, json: Any, model: type[T] = dict, **kwargs: Any) -> Coroutine[Any, Any, T]:
             return self.request(hdrs.METH_PUT, endpoint, model, json=json, **kwargs)
+
+        def delete(self, endpoint: str, params: Query | None = None, model: type[T] = dict, **kwargs: Any) -> \
+                Coroutine[Any, Any, T]:
+            return self.request(hdrs.METH_DELETE, endpoint, model, params=params, **kwargs)
+
+        def patch(self, endpoint: str, json: Any, model: type[T] = dict, **kwargs: Any) -> Coroutine[Any, Any, T]:
+            return self.request(hdrs.METH_PATCH, endpoint, model, json=json, **kwargs)

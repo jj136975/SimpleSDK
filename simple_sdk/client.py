@@ -1,4 +1,4 @@
-from typing import override, TypeVar
+from typing import override
 
 import serde.json
 from aiohttp import ClientSession
@@ -6,11 +6,8 @@ from aiohttp import ClientSession
 from .auth import Authenticator
 from .config import BaseConfiguration
 
-TAuth = TypeVar('TAuth', bound=Authenticator)
-TConfig = TypeVar('TConfig', bound=BaseConfiguration)
 
-
-class ApiClient:
+class ApiClient[TConfig: BaseConfiguration, TAuth: Authenticator]:
     """Base API client that handles authentication and session management."""
 
     def __init__(self, config: TConfig, auth: TAuth):
@@ -45,17 +42,20 @@ class ApiClient:
             self._session = None
 
 
-class JsonApiClient(ApiClient):
+class JsonApiClient[TConfig: BaseConfiguration, TAuth: Authenticator](ApiClient[TConfig, TAuth]):
     """API client that automatically sets Content-Type to application/json and uses serde for JSON serialization."""
 
     def __init__(self, config: TConfig, auth: TAuth) -> None:
         super().__init__(config, auth)
         self.config.headers['Content-Type'] = 'application/json'
+        self.config.headers['Accept'] = 'application/json'
 
     @override
     async def ensure_session(self) -> ClientSession:
-        session = await super().ensure_session()
-        session.headers['Content-Type'] = 'application/json'
-        session.headers['Accept'] = 'application/json'
-        session._json_serialize = lambda obj: serde.json.to_json(obj, skip_none=True)
-        return session
+        """Ensure that the client session is initialized with JSON serialization and return it."""
+        if self._session is None:
+            session = self.config.create_session(
+                json_serialize=lambda obj: serde.json.to_json(obj, skip_none=True)
+            )
+            self._session = await self.auth.authenticate(session)
+        return self._session

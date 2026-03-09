@@ -1,4 +1,5 @@
 from dataclasses import dataclass, field
+from typing import Any
 
 from aiohttp import ClientSession
 
@@ -16,11 +17,12 @@ class BaseConfiguration:
     agent: str = 'HTTP SDK/python'
     """User-Agent string to identify the client (default: 'HTTP SDK/python')."""
 
-    def create_session(self) -> ClientSession:
+    def create_session(self, **kwargs: Any) -> ClientSession:
+        """Create an aiohttp ClientSession with the configured base URL and headers."""
         headers = self.headers.copy()
         headers['User-Agent'] = self.agent
-        """Create an aiohttp ClientSession with the configured base URL and headers."""
         return ClientSession(
             base_url=self.base_url,
             headers=headers,
+            **kwargs,
         )

@@ -1,3 +1,5 @@
+from enum import StrEnum
+
 from serde import serde
 
 
@@ -7,7 +9,7 @@ class MyApiError:
     message: str
 
 
-class MyRole:
+class MyRole(StrEnum):
     ADMIN = "admin"
     USER = "user"
 
