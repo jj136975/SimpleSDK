@@ -1,7 +1,7 @@
 from dataclasses import dataclass, field
 from typing import Any
 
-from aiohttp import ClientSession
+from aiohttp import ClientSession, ClientTimeout
 
 
 @dataclass
@@ -17,10 +17,15 @@ class BaseConfiguration:
     agent: str = 'HTTP SDK/python'
     """User-Agent string to identify the client (default: 'HTTP SDK/python')."""
 
+    timeout: ClientTimeout | None = None
+    """Request timeout configuration. If None, aiohttp defaults are used."""
+
     def create_session(self, **kwargs: Any) -> ClientSession:
         """Create an aiohttp ClientSession with the configured base URL and headers."""
         headers = self.headers.copy()
         headers['User-Agent'] = self.agent
+        if self.timeout is not None:
+            kwargs.setdefault('timeout', self.timeout)
         return ClientSession(
             base_url=self.base_url,
             headers=headers,
