@@ -15,7 +15,7 @@ if TYPE_CHECKING:
     from aiohttp.client import _RequestOptions
 
 
-    class RetryOptions(_RequestOptions):
+    class RetryOptions(_RequestOptions, total=False):
         """Options for retrying HTTP requests."""
 
         retry_status: int | Sequence[int]

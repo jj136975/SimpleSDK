@@ -1,9 +1,9 @@
 from dataclasses import dataclass, field
 
-DEFAULT_AUTH_URL = "https://login.salesforce.com"
+from aiohttp import ClientSession
 
 
-@dataclass(frozen=True)
+@dataclass
 class BaseConfiguration:
     """Base configuration for API clients."""
 
@@ -15,3 +15,12 @@ class BaseConfiguration:
 
     agent: str = 'HTTP SDK/python'
     """User-Agent string to identify the client (default: 'HTTP SDK/python')."""
+
+    def create_session(self) -> ClientSession:
+        headers = self.headers.copy()
+        headers['User-Agent'] = self.agent
+        """Create an aiohttp ClientSession with the configured base URL and headers."""
+        return ClientSession(
+            base_url=self.base_url,
+            headers=headers,
+        )

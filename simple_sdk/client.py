@@ -1,15 +1,19 @@
-from typing import override
+from typing import override, TypeVar
 
 import serde.json
 from aiohttp import ClientSession
 
+from .auth import Authenticator
 from .config import BaseConfiguration
-from .credentials import CredentialLoader
+
+TAuth = TypeVar('TAuth', bound=Authenticator)
+TConfig = TypeVar('TConfig', bound=BaseConfiguration)
 
 
-class ApiClient[TConfig: BaseConfiguration, TAuth = str]:
+class ApiClient:
     """Base API client that handles authentication and session management."""
-    def __init__(self, config: TConfig, auth: CredentialLoader[TConfig, TAuth]):
+
+    def __init__(self, config: TConfig, auth: TAuth):
         self._config = config
         self._auth = auth
         self._session: ClientSession | None = None
@@ -20,36 +24,19 @@ class ApiClient[TConfig: BaseConfiguration, TAuth = str]:
         return self._config
 
     @property
-    def auth(self) -> CredentialLoader[TConfig, TAuth]:
+    def auth(self) -> TAuth:
         """Access the client's authentication loader."""
         return self._auth
 
-    def _create_headers(self, api_key: TAuth, ) -> dict[str, str]:
-        """Create headers for the API session, including authentication and user agent."""
-        headers = self._config.headers.copy()
-
-        if auth_prefix := self._auth.get_auth_header_prefix():
-            headers['Authorization'] = auth_prefix + " " + api_key
-        else:
-            headers['Authorization'] = api_key
-
-        if self._config.agent:
-            headers['User-Agent'] = self._config.agent
-
-        return headers
-
-    async def _create_session(self) -> ClientSession:
-        """Create an aiohttp ClientSession with the appropriate headers for authentication."""
-        api_key = await self._auth.authenticate(self._config)
-        headers = self._create_headers(api_key)
-
-        return ClientSession(
-            base_url=self._config.base_url,
-            headers=headers,
-        )
+    async def ensure_session(self) -> ClientSession:
+        """Ensure that the client session is initialized and return it."""
+        if self._session is None:
+            session = self.config.create_session()
+            self._session = await self.auth.authenticate(session)
+        return self._session
 
     async def __aenter__(self):
-        self._session = await self._create_session()
+        self._session = await self.ensure_session()
         return self
 
     async def __aexit__(self, exc_type, exc_val, exc_tb):
@@ -58,23 +45,17 @@ class ApiClient[TConfig: BaseConfiguration, TAuth = str]:
             self._session = None
 
 
-class JsonApiClient[TConfig: BaseConfiguration, TAuth = str](ApiClient[TConfig, TAuth]):
+class JsonApiClient(ApiClient):
     """API client that automatically sets Content-Type to application/json and uses serde for JSON serialization."""
-    @override
-    def _create_headers(self, api_key: TAuth) -> dict[str, str]:
-        """Extend the base headers to include Content-Type for JSON requests."""
-        headers = super()._create_headers(api_key)
-        headers['Content-Type'] = 'application/json'
-        return headers
+
+    def __init__(self, config: TConfig, auth: TAuth) -> None:
+        super().__init__(config, auth)
+        self.config.headers['Content-Type'] = 'application/json'
 
     @override
-    async def _create_session(self) -> ClientSession | None:
-        """Create an aiohttp ClientSession with JSON serialization using serde."""
-        api_key = await self._auth.authenticate(self._config)
-        headers = self._create_headers(api_key)
-
-        return ClientSession(
-            base_url=self._config.base_url,
-            headers=headers,
-            json_serialize=lambda obj: serde.json.to_json(obj, skip_none=True),
-        )
+    async def ensure_session(self) -> ClientSession:
+        session = await super().ensure_session()
+        session.headers['Content-Type'] = 'application/json'
+        session.headers['Accept'] = 'application/json'
+        session._json_serialize = lambda obj: serde.json.to_json(obj, skip_none=True)
+        return session
