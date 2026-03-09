@@ -197,6 +197,8 @@ class BaseApi:
                         status = response.status
 
                         if status in self._SUCCESS_STATUS:
+                            if model is bytes:
+                                return await response.read()
                             try:
                                 return await response.json(loads=lambda obj: serde.json.from_json(model, obj))
                             except SerdeError as e:
