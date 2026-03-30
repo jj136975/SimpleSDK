@@ -4,11 +4,11 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "simple_sdk"
-version = "0.1.0"
+version = "0.1.2"
 requires-python = ">=3.12"
 dependencies = [
-    "aiohttp>=3.13",
-    "pyserde>=0.30",
+    "aiohttp>=3.13.4",
+    "pyserde>=0.31.1",
     "orjson",
 ]
 
